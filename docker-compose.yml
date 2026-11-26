@@ -1,0 +1,70 @@
+# NLP -> SQL local: pergunta em português, LLM (GPU do chat-local) gera o SQL,
+# que roda num PostgreSQL "caixa de areia" separado.
+#
+# Pré-requisito: chat-local no ar (ele fornece o llama-swap com o Qwen na GPU).
+# Subir:            docker compose up -d --build
+# Link público:     docker compose --profile publico up -d   (veja o README)
+# Parar:            docker compose --profile publico down
+
+name: nlp-sql
+
+services:
+  nlp-db:
+    # Banco separado do chat-local de propósito: o SQL gerado pelo LLM nunca
+    # chega perto de usuários, mensagens ou senhas do outro projeto.
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: nlp
+      POSTGRES_USER: nlp_owner
+      POSTGRES_PASSWORD: ${NLP_OWNER_PASSWORD:?rode scripts/preparar_env.sh}
+      LLM_RO_PASSWORD: ${LLM_RO_PASSWORD:?rode scripts/preparar_env.sh}
+    volumes:
+      - nlpdata:/var/lib/postgresql/data
+      # Rodam só na primeira subida (volume vazio), em ordem alfabética
+      - ./docker/initdb/001_roles.sh:/docker-entrypoint-initdb.d/001_roles.sh:ro
+      - ./sql/exemplo.sql:/docker-entrypoint-initdb.d/002_exemplo.sql:ro
+    ports:
+      - "127.0.0.1:5434:5432"   # 5432 e 5433 já são do chat-local e da auditoria
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nlp_owner -d nlp"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  nlp-api:
+    build: ./app
+    restart: unless-stopped
+    environment:
+      DATABASE_URL_RO: postgresql://llm_ro:${LLM_RO_PASSWORD}@nlp-db:5432/nlp
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://llm:8080/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-chat-4b}
+      MAX_LINHAS: ${MAX_LINHAS:-200}
+      LIMITE_POR_MINUTO: ${LIMITE_POR_MINUTO:-10}
+    ports:
+      - "127.0.0.1:8100:8000"
+    networks:
+      - default
+      - chatlocal   # para enxergar o "llm" (llama-swap, GPU) do chat-local
+    depends_on:
+      nlp-db:
+        condition: service_healthy
+
+  tunnel:
+    # Link público temporário https://<aleatorio>.trycloudflare.com, sem conta e
+    # sem abrir portas no roteador. Só sobe com --profile publico.
+    image: cloudflare/cloudflared:latest
+    profiles: ["publico"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://nlp-api:8000
+    depends_on:
+      - nlp-api
+
+networks:
+  chatlocal:
+    external: true
+    name: chat-local_default
+
+volumes:
+  nlpdata:
