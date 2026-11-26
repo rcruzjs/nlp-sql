@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pergunte ao banco</title>
+<style>
+  :root {
+    --fundo: #f6f7f9; --cartao: #ffffff; --texto: #1d2330; --suave: #5f6b7a;
+    --borda: #e2e6eb; --destaque: #2f6fed; --destaque-texto: #ffffff;
+    --codigo-fundo: #0f1726; --codigo-texto: #d7e3ff; --erro: #c2362f; --chip: #eef2fb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fundo: #0e1117; --cartao: #161b24; --texto: #e6e9ef; --suave: #9aa5b4;
+      --borda: #283040; --destaque: #5b8cff; --codigo-fundo: #0a0f1a; --chip: #1d2533;
+      --erro: #ff6b62;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--fundo); color: var(--texto);
+         font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 920px; margin: 0 auto; padding: 40px 16px 56px; }
+  h1 { margin: 0 0 4px; font-size: 1.9rem; letter-spacing: -0.02em; }
+  .sub { margin: 0 0 24px; color: var(--suave); }
+  .cartao { background: var(--cartao); border: 1px solid var(--borda); border-radius: 12px; padding: 20px; }
+  .linha { display: flex; gap: 10px; }
+  textarea { flex: 1; min-height: 52px; resize: vertical; padding: 12px 14px; font: inherit;
+             color: var(--texto); background: var(--fundo); border: 1px solid var(--borda); border-radius: 8px; }
+  textarea:focus { outline: 2px solid var(--destaque); outline-offset: 1px; }
+  button.principal { padding: 0 22px; font-family: inherit; font-weight: 600; font-size: 1rem; color: var(--destaque-texto);
+                     background: var(--destaque); border: 0; border-radius: 8px; cursor: pointer; }
+  button.principal:disabled { opacity: .6; cursor: wait; }
+  .exemplos { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  .exemplos button { font: inherit; font-size: .86rem; padding: 5px 11px; color: var(--texto);
+                     background: var(--chip); border: 1px solid var(--borda); border-radius: 999px; cursor: pointer; }
+  .resultado { margin-top: 20px; display: none; }
+  .meta { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; font-size: .85rem; color: var(--suave); }
+  .meta span { background: var(--chip); border-radius: 6px; padding: 3px 9px; }
+  pre { margin: 0 0 16px; padding: 14px 16px; overflow-x: auto; border-radius: 8px;
+        background: var(--codigo-fundo); color: var(--codigo-texto); font: .88rem/1.55 ui-monospace, Consolas, monospace; }
+  .tabela { overflow-x: auto; border: 1px solid var(--borda); border-radius: 8px; }
+  table { border-collapse: collapse; width: 100%; font-size: .95rem; }
+  th, td { padding: 9px 14px; text-align: left; border-bottom: 1px solid var(--borda); white-space: nowrap; }
+  th { font-weight: 600; color: var(--suave); font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; }
+  tr:last-child td { border-bottom: 0; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .erro { color: var(--erro); white-space: pre-wrap; }
+  footer { margin-top: 24px; font-size: .82rem; color: var(--suave); }
+  @media (max-width: 560px) { .linha { flex-direction: column; } button.principal { padding: 12px; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Pergunte ao banco em português</h1>
+  <p class="sub">Um LLM local (Qwen na GPU) gera o SQL, que é validado e roda no PostgreSQL com usuário somente leitura.</p>
+
+  <div class="cartao">
+    <div class="linha">
+      <textarea id="pergunta" rows="2">Quais os 5 produtos com maior faturamento?</textarea>
+      <button class="principal" id="enviar">Perguntar</button>
+    </div>
+    <div class="exemplos" id="exemplos"></div>
+
+    <div class="resultado" id="resultado">
+      <div class="meta" id="meta"></div>
+      <pre id="sql"></pre>
+      <div class="tabela" id="tabela"></div>
+    </div>
+  </div>
+
+  <footer>Proteções: validação com sqlglot · usuário <code>llm_ro</code> somente leitura · timeout de 10 s · limite por IP.</footer>
+</main>
+<script>
+const EXEMPLOS = [
+  "Quais os 5 produtos com maior faturamento?",
+  "Qual o faturamento por estado em 2026?",
+  "Quantos clientes compraram mais de 10 vezes?",
+  "Ticket médio por categoria de produto",
+  "Faturamento mensal de 2025",
+];
+const $ = id => document.getElementById(id);
+const esc = v => String(v ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fmt = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 2 });
+
+EXEMPLOS.forEach(texto => {
+  const b = document.createElement("button");
+  b.textContent = texto;
+  b.onclick = () => { $("pergunta").value = texto; perguntar(); };
+  $("exemplos").appendChild(b);
+});
+
+async function perguntar() {
+  const botao = $("enviar");
+  botao.disabled = true; botao.textContent = "Gerando...";
+  $("resultado").style.display = "block";
+  $("meta").innerHTML = "<span>Consultando o LLM local...</span>";
+  $("sql").textContent = ""; $("tabela").innerHTML = "";
+  const t0 = performance.now();
+  try {
+    const resp = await fetch("/perguntar", { method: "POST", headers: { "Content-Type": "application/json" },
+                                             body: JSON.stringify({ pergunta: $("pergunta").value }) });
+    const d = await resp.json();
+    const total = fmt.format(Math.round((performance.now() - t0) / 100) / 10);
+    if (!resp.ok) {
+      const det = d.detail;
+      $("meta").innerHTML = `<span>Erro ${resp.status}</span>`;
+      $("sql").textContent = det && det.sql ? det.sql : "";
+      $("tabela").innerHTML = `<p class="erro" style="padding:12px 14px;margin:0">${esc(det && det.erro ? det.erro : det)}</p>`;
+      return;
+    }
+    $("meta").innerHTML = `<span>SQL gerado em ${fmt.format(d.tempo_llm_s)} s</span><span>Total ${total} s</span>` +
+                          `<span>${d.linhas.length} linha(s)</span>`;
+    $("sql").textContent = d.sql;
+    const numerica = d.colunas.map((_, i) => d.linhas.length > 0 && d.linhas.every(l => typeof l[i] === "number"));
+    $("tabela").innerHTML = "<table><thead><tr>" +
+      d.colunas.map((c, i) => `<th${numerica[i] ? ' style="text-align:right"' : ""}>${esc(c)}</th>`).join("") +
+      "</tr></thead><tbody>" +
+      d.linhas.map(l => "<tr>" + l.map((v, i) =>
+        numerica[i] ? `<td class="num">${fmt.format(v)}</td>` : `<td>${esc(v)}</td>`).join("") + "</tr>").join("") +
+      "</tbody></table>";
+  } catch (e) {
+    $("meta").innerHTML = `<span class="erro">Falha de conexão: ${esc(e.message)}</span>`;
+  } finally {
+    botao.disabled = false; botao.textContent = "Perguntar";
+  }
+}
+$("enviar").onclick = perguntar;
+$("pergunta").addEventListener("keydown", e => {
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) perguntar();
+});
+</script>
+</body>
+</html>

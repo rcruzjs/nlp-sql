@@ -9,7 +9,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY main.py .
+COPY main.py pagina.html ./
 
 # Usuário sem privilégios: se a API for comprometida, o atacante não é root no container.
 RUN useradd --system --uid 10001 app
