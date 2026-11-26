@@ -20,6 +20,7 @@ import os
 import re
 import time
 from collections import defaultdict, deque
+from pathlib import Path
 
 import httpx
 import psycopg
@@ -123,7 +124,8 @@ def validar_sql(sql: str) -> str:
     arvore = comandos[0]
     if not isinstance(arvore, exp.Query) or arvore.find(*NOS_PROIBIDOS):
         raise HTTPException(422, "Apenas consultas de leitura (SELECT) são permitidas.")
-    return arvore.sql(dialect="postgres")
+    # pretty=True: SQL indentado, mais fácil de ler na interface e nos logs
+    return arvore.sql(dialect="postgres", pretty=True)
 
 
 def gerar_sql(pergunta: str, esquema: str) -> str:
@@ -197,36 +199,12 @@ def perguntar(dados: Pergunta, request: Request):
     }
 
 
+# A página fica num arquivo separado: HTML/CSS/JS ganham realce de sintaxe no editor
+# e podem ser alterados sem mexer na lógica da API. Lida uma vez, na subida.
+PAGINA_HTML = (Path(__file__).parent / "pagina.html").read_text(encoding="utf-8")
+
+
 @app.get("/", response_class=HTMLResponse)
 def pagina():
-    """Página simples para testar no navegador."""
-    return """<!doctype html>
-<html lang="pt-br"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pergunte ao banco</title>
-<style>
- body{font-family:system-ui,sans-serif;max-width:900px;margin:2rem auto;padding:0 1rem}
- textarea{width:100%;height:4rem;font-size:1rem;box-sizing:border-box} button{padding:.5rem 1.2rem;font-size:1rem}
- pre{background:#f3f3f3;padding:.8rem;overflow:auto;white-space:pre-wrap} table{border-collapse:collapse;width:100%}
- td,th{border:1px solid #ccc;padding:.3rem .5rem;text-align:left} .r{overflow-x:auto}
-</style></head><body>
-<h1>Pergunte ao banco em português</h1>
-<textarea id="p">Quais os 5 produtos com maior faturamento?</textarea>
-<p><button id="b">Perguntar</button> <span id="s"></span></p>
-<pre id="q"></pre><div class="r" id="r"></div>
-<script>
-const esc = v => String(v ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
-document.getElementById("b").onclick = async () => {
-  const s = document.getElementById("s"), q = document.getElementById("q"), r = document.getElementById("r");
-  s.textContent = "Gerando SQL no LLM local..."; q.textContent = ""; r.innerHTML = "";
-  const t0 = performance.now();
-  const resp = await fetch("/perguntar", {method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({pergunta: document.getElementById("p").value})});
-  const d = await resp.json();
-  s.textContent = `${((performance.now()-t0)/1000).toFixed(1)} s`;
-  if (!resp.ok) { q.textContent = JSON.stringify(d.detail, null, 2); return; }
-  q.textContent = d.sql;
-  r.innerHTML = "<table><tr>" + d.colunas.map(c => `<th>${esc(c)}</th>`).join("") + "</tr>" +
-    d.linhas.map(l => "<tr>" + l.map(v => `<td>${esc(v)}</td>`).join("") + "</tr>").join("") + "</table>";
-};
-</script></body></html>"""
+    """Interface web para testar no navegador."""
+    return PAGINA_HTML
